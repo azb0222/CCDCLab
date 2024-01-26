@@ -1,0 +1,53 @@
+---
+- name: Bootstrap Process For K8 Worker Nodes
+  hosts: workerNodes
+  become: yes  # Use 'become' for privilege escalation
+
+  tasks:
+    - name: Set Docker daemon configuration
+      ansible.builtin.copy:
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"]
+          }
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      become: yes
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      become: yes
+
+    - name: Restart Docker service
+      ansible.builtin.service:
+        name: docker
+        state: restarted
+      become: yes
+
+    - name: Restart Kubelet service
+      ansible.builtin.service:
+        name: kubelet
+        state: restarted
+      become: yes
+
+    - name: Fetch the kubeadm join command from the master node
+      ansible.builtin.fetch:
+        src: "/etc/kubernetes/kubeadm_join_command"
+        dest: "./kubeadm_join_command"
+        flat: yes
+      delegate_to: "{{ hostvars[groups['masterNode'][0]]['ansible_host'] }}"
+      remote_user: ubuntu
+      run_once: true
+
+    - name: Copy the kubeadm join command to worker nodes
+      ansible.builtin.copy:
+        src: "./kubeadm_join_command"
+        dest: "/tmp/kubeadm_join_command"
+
+    - name: Join the cluster
+      ansible.builtin.shell:
+        cmd: "sh /tmp/kubeadm_join_command"
+      become: yes

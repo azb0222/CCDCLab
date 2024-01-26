@@ -1,0 +1,30 @@
+---
+- name: Setup Wazuh User
+  hosts: wazuh
+  remote_user: ubuntu
+  vars:
+    ansible_ssh_private_key_file: ../../network/key.pem
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  become: yes
+
+  tasks:
+    - name: Add Wazuh User
+      ansible.builtin.user:
+        name: wazuh
+        # Password is `cptcInfra12!`
+        password: $6$balls$tvYVsVWeh7ImDBJNzt.Qx6giS3duRBT5rn9EywrA9ELzaQsVxbl3yKymlUf.txo5MRKJ6R0eGtMikUpQPfyUZ1
+        groups:
+          - root
+          - admin
+        shell: /bin/bash
+
+    - name: Allow Password Authentication
+      ansible.builtin.replace:
+        path: /etc/ssh/sshd_config
+        regexp: "PasswordAuthentication no"
+        replace: "PasswordAuthentication yes"
+
+    - name: Restart SSHD
+      ansible.builtin.service:
+        name: sshd
+        state: restarted

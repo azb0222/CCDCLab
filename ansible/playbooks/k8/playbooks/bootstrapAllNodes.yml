@@ -1,0 +1,73 @@
+---
+- name: Bootstrap Process For K8 Nodes
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Update package lists
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install dependencies
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - gnupg
+        state: present
+
+    - name: Add the Kubernetes apt repository GPG key
+      ansible.builtin.apt_key:
+        url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+        state: present
+
+    - name: Add the Kubernetes apt repository
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: deb https://apt.kubernetes.io/ kubernetes-xenial main
+        create: yes
+      notify:
+        - Update apt cache
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - kubectl
+          - kubeadm
+          - kubelet
+          - kubernetes-cni
+          - docker.io
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker service is started and enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add user to Docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Add custom sysctl settings for Kubernetes
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+        owner: root
+        group: root
+        mode: '0644'
+      notify:
+        - Reload sysctl
+
+  handlers:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Reload sysctl
+      ansible.builtin.command:
+        cmd: sysctl --system

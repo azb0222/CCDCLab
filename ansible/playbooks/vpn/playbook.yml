@@ -1,0 +1,134 @@
+---
+- name: Setup Users Config
+  hosts: localhost
+
+  tasks:
+    - name: Run User Generator
+      ansible.builtin.command: python3 ./user_gen.py
+
+- name: Setup Wireguard VPN
+  hosts: vpn
+  vars:
+    ansible_ssh_private_key_file: ../../../tf-infrastructure/modules/wireguard/ssh_keys/privatekey.pem
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  remote_user: ubuntu
+  become: yes
+
+  tasks:
+    - name: Apt Update & Install Wireguard
+      ansible.builtin.apt:
+        update_cache: yes
+        pkg:
+          - wireguard
+
+    - name: Setup Wireguard Keys
+      ansible.builtin.shell:
+        cmd: wg genkey | tee privatekey | wg pubkey > publickey
+        chdir: /etc/wireguard
+        creates: /etc/wireguard/publickey
+
+    - name: Read Pubkey
+      ansible.builtin.command: cat /etc/wireguard/publickey
+      register: publickey
+
+    - name: Save Pubkey
+      ansible.builtin.set_fact:
+        pubkey: "{{ publickey.stdout }}"
+
+    - name: Read Privkey
+      ansible.builtin.command: cat /etc/wireguard/privatekey
+      register: privatekey
+
+    - name: Save Privkey
+      ansible.builtin.set_fact:
+        privkey: "{{ privatekey.stdout }}"
+
+- name: Create User Keys
+  hosts: localhost
+  vars_files:
+    - ./tf_ansible_vars.yml
+
+  vars:
+    base_dir: /tmp/rb_wg
+    users: "{{ lookup('file', 'users.json') | from_json }}"
+
+  tasks:
+    - name: Create Directories
+      ansible.builtin.command: "mkdir -p {{ base_dir }}/{{ item.name }}"
+      loop: "{{ users }}"
+
+    - name: Generate Keys
+      ansible.builtin.shell:
+        cmd: wg genkey | tee privatekey | wg pubkey > publickey
+        chdir: "{{ base_dir }}/{{ item.name }}"
+        creates: "{{ base_dir }}/{{ item.name }}/privatekey"
+      loop: "{{ users }}"
+
+    - name: Read Public Keys
+      set_fact:
+        users: "{{ users | rejectattr('name', 'equalto', item.name) | list + [item | combine({'public_key':lookup('file', base_dir + '/' + item.name + '/publickey')})] }}"
+      loop: "{{ users }}"
+
+    - name: Read Private Keys
+      set_fact:
+        users: "{{ users | rejectattr('name', 'equalto', item.name) | list + [item | combine({'private_key':lookup('file', base_dir + '/' + item.name + '/privatekey')})] }}"
+      loop: "{{ users }}"
+
+    - name: Generate Configs
+      ansible.builtin.template:
+        src: ./conf/client.conf
+        dest: "{{ base_dir }}/{{ item.name }}/{{ item.name }}.conf"
+      loop: "{{ users }}"
+      vars:
+        client_privatekey: "{{ item.private_key }}"
+        client_ip: "{{ item.ip }}"
+        server_publickey: "{{ hostvars[tf_vpn_server_ip]['pubkey'] }}"
+
+- name: Start Wireguard VPN
+  hosts: vpn
+  vars:
+    ansible_ssh_private_key_file: ../../../tf-infrastructure/modules/wireguard/ssh_keys/privatekey.pem
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  remote_user: ubuntu
+  become: yes
+
+  tasks:
+    - name: Set Server Config
+      ansible.builtin.template:
+        src: ./conf/server.conf
+        dest: "/etc/wireguard/server.conf"
+      vars:
+        server_privatekey: "{{ privkey }}"
+
+    - name: Setup IP Forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        sysctl_set: yes
+        reload: yes
+
+    - name: Start Server
+      ansible.builtin.command: wg-quick up server
+
+    - name: Add User Configs
+      ansible.builtin.command: "wg set server peer {{ item.public_key }} allowed-ips {{ item.ip }}"
+      loop: "{{ hostvars['localhost']['users'] }}"
+
+- name: Zip Configs to Local CWD
+  hosts: localhost
+
+  tasks:
+    - name: Zip Red Configs
+      ansible.builtin.archive:
+        path:
+          - /tmp/rb_wg/red*
+        dest: ./red.zip
+        format: zip
+
+    - name: Zip Blue Configs
+      ansible.builtin.archive:
+        path:
+          - /tmp/rb_wg/blue*
+        dest: ./blue.zip
+        format: zip

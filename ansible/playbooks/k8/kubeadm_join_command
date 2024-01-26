@@ -1,0 +1,1 @@
+kubeadm join 172.31.16.223:6443 --token qmrtwz.ydtc7gbp66ogxqhx --discovery-token-ca-cert-hash sha256:852ae02e35abb3c5021d4a977099a39d0d8d1ef773870fe6fefadc50db01129c 

@@ -1,0 +1,15 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: default-storage-class
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+allowedTopologies:
+- matchLabelExpressions:
+  - key: topology.kubernetes.io/zone
+    values:
+    - us-east-1a
+volumeBindingMode: Immediate
+reclaimPolicy: Delete
+

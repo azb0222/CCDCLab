@@ -1,0 +1,115 @@
+---
+- name: Installing Helm
+  hosts: masterNode
+  gather_facts: yes
+  tasks:
+    - name: Download Helm installation script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+
+    - name: Execute Helm installation script
+      command: /tmp/get_helm.sh
+
+- name: Manage AWS EBS CSI Driver with Helm 
+  hosts: masterNode
+  become: yes
+  vars:
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+    local_credentials_file_path: "/Users/asritha.bodepudi/Library/CloudStorage/OneDrive-UKG/Desktop/CCDCSetup/ansible/playbooks/k8/files/aws_credentials.txt" # TODO: FIX FILE PATH ONCE MOVED OVER THE TF-INFRASTRUCTURE
+    remote_credentials_file_path: "/tmp/aws_credentials.txt" # Temporary remote path to copy the file to
+  tasks:
+    - name: Copy AWS Credentials File to Remote
+      copy:
+        src: "{{ local_credentials_file_path }}"
+        dest: "{{ remote_credentials_file_path }}"
+        mode: '0600' # Sets the permission of the file to be read-write for the owner only
+
+    - name: Read AWS Credentials File
+      shell: cat "{{ remote_credentials_file_path }}"
+      register: aws_creds
+      changed_when: false
+
+    - name: Set AWS Credentials as Facts
+      set_fact:
+        aws_access_key_id: "{{ aws_creds.stdout_lines[0].split(': ')[1] }}"
+        aws_secret_access_key: "{{ aws_creds.stdout_lines[1].split(': ')[1] }}"
+    
+    - name: Create Kubernetes secret for AWS credentials using kubectl
+      ansible.builtin.shell:
+        cmd: |
+          kubectl create secret generic aws-secret \
+          --namespace kube-system \
+          --from-literal "key_id={{ aws_access_key_id }}" \
+          --from-literal "access_key={{ aws_secret_access_key }}"
+      become_user: ubuntu
+        
+    - name: Remove AWS Credentials File from Remote
+      file:
+        path: "{{ remote_credentials_file_path }}"
+        state: absent
+
+    - name: Add AWS EBS CSI Driver Helm Repository
+      ansible.builtin.command:
+        cmd: "helm repo add aws-ebs-csi-driver https://kubernetes-sigs.github.io/aws-ebs-csi-driver"
+      register: add_repo
+      failed_when: "'already exists' not in add_repo.stderr and add_repo.rc != 0"
+      become_user: ubuntu
+
+    - name: Install/Upgrade AWS EBS CSI Driver
+      ansible.builtin.command:
+        cmd: "helm upgrade --install aws-ebs-csi-driver --namespace kube-system aws-ebs-csi-driver/aws-ebs-csi-driver"
+      become_user: ubuntu
+
+- name: Apply and Patch Kubernetes Storage Class
+  hosts: masterNode
+  gather_facts: no
+  tasks:
+    - name: Copy storage class configuration from local to remote
+      ansible.builtin.copy:
+        src: ./../files/k8Manifests/StorageClass.yaml  # Specify the path to your local storageclass.yaml file
+        dest: /tmp/storageclass.yaml  # Destination path on the target server
+        mode: '0644'
+      become_user: ubuntu
+
+    - name: Apply the storage class configuration from copied file
+      ansible.builtin.command:
+        cmd: "kubectl apply -f /tmp/storageclass.yaml"
+      become_user: ubuntu
+
+    - name: Patch the default storage class
+      ansible.builtin.shell:
+        cmd: >
+          kubectl patch storageclass default-storage-class
+          -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      become_user: ubuntu
+
+
+- name: Install GitLab with Helm
+  hosts: masterNode
+  gather_facts: no
+  tasks:
+    - name: Add GitLab Helm Repository
+      ansible.builtin.command:
+        cmd: "helm repo add gitlab https://charts.gitlab.io/"
+      register: add_repo
+      failed_when: "'already exists' not in add_repo.stderr and add_repo.rc != 0"
+      become_user: ubuntu
+
+    - name: Update Helm Repositories
+      ansible.builtin.command:
+        cmd: helm repo update
+
+    - name: Install/Upgrade GitLab
+      ansible.builtin.command:
+        cmd: >
+          helm upgrade --install gitlab gitlab/gitlab
+          --timeout 600s
+          --set global.hosts.domain=umasscybersec.org
+          --set global.hosts.externalIP=18.117.171.84
+          --set certmanager-issuer.email=umasscybersec@gmail.com
+          --set postgresql.image.tag=13.6.0
+      args:
+        executable: /bin/bash
+      become_user: ubuntu

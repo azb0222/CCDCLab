@@ -1,0 +1,136 @@
+---
+- name: Bootstrap Process For K8 Master Node
+  hosts: masterNode
+  become: yes
+  vars:
+    custom_home: "/home/ubuntu"  # Define your custom variable
+
+  tasks:
+    - name: Reset Kubernetes node
+      ansible.builtin.shell:
+        cmd: kubeadm reset --force
+
+    - name: Remove Kubernetes configuration directory
+      ansible.builtin.file:
+        path: "/etc/kubernetes"  # Use custom_home for consistency
+        state: absent
+
+    - name: Remove Kubernetes configuration directory 2
+      ansible.builtin.file:
+        path: "~/.kube"  # Use custom_home for consistency
+        state: absent
+
+    - name: Debug IP address and environment variables
+      ansible.builtin.debug:
+        msg: "The IP address being used is {{ ansible_default_ipv4.address }}, HOME: {{ custom_home }}, USER: {{ ansible_env.USER }}"
+
+    - name: Pre-pull Kubernetes Docker images
+      ansible.builtin.command:
+        cmd: kubeadm config images pull
+
+    - name: Configure Docker daemon for systemd cgroup driver
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"]
+          }
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        name: systemd
+        daemon_reload: yes
+
+    - name: Restart docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+
+    - name: Initialize Kubernetes cluster and capture output
+      ansible.builtin.shell:
+        cmd: kubeadm init --apiserver-advertise-address={{ ansible_default_ipv4.address }} --pod-network-cidr=10.244.0.0/16
+
+    - name: Ensure the .kube directory exists
+      ansible.builtin.file:
+        path: "{{ custom_home }}/.kube"
+        state: directory
+        mode: '0755'
+
+    - name: Copy Kubernetes admin configuration to user's .kube directory
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ custom_home }}/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_env.USER }}"
+        group: "{{ ansible_env.USER }}"
+        mode: '0644'
+      become: yes
+
+    - name: Change ownership of the .kube/config file
+      ansible.builtin.raw: sudo chown $(id -u):$(id -g) /home/ubuntu/.kube/config
+
+    - name: Print a message
+      ansible.builtin.debug:
+        msg: "Kubernetes configuration has been set up in {{ custom_home }}/.kube/config"
+
+    - name: Pause for 2 minutes
+      ansible.builtin.pause:
+        minutes: 2 # a shitty filler, change it to ping the k8 API until its ready, not wait 2 minutes 
+
+    - name: Debug IP address and environment variables
+      ansible.builtin.debug:
+        msg: "The IP address being used is {{ ansible_default_ipv4.address }}, HOME: {{ custom_home }}, USER: {{ ansible_env.USER }}"
+
+    - name: Apply Flannel CNI using kubectl
+      ansible.builtin.command: 
+        cmd: kubectl apply -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml 
+      become_user: ubuntu
+    
+    - name: Initialize Kubernetes cluster and capture output
+      ansible.builtin.shell:
+        cmd: kubeadm token create --print-join-command
+      register: kubeadm_init_output
+
+    - name: Save the kubeadm join command to a file
+      ansible.builtin.copy:
+        dest: "/etc/kubernetes/kubeadm_join_command"
+        content: "{{ kubeadm_init_output.stdout_lines[0] }}"  # Extract the first line of the output
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Remove 'control-plane' taint from all nodes
+      ansible.builtin.shell:
+        cmd: kubectl taint nodes --all node-role.kubernetes.io/control-plane-
+      become_user: ubuntu
+
+- name: Label Kubernetes Nodes
+  hosts: masterNode
+
+  vars:
+    kube_context: default  # Set to your Kubernetes context
+    region_label: topology.kubernetes.io/region=us-east-1
+    zone_label: topology.kubernetes.io/zone=us-east-1a
+
+  tasks:
+    - name: Get list of all nodes
+      shell: "kubectl get nodes -o=jsonpath='{.items[*].metadata.name}'"
+      register: k8s_nodes
+      become_user: ubuntu
+
+    - name: Label each node with region
+      shell: "kubectl label nodes {{ item }} {{ region_label }} --overwrite"
+      loop: "{{ k8s_nodes.stdout.split() }}"
+      become_user: ubuntu
+
+    - name: Label each node with zone
+      shell: "kubectl label nodes {{ item }} {{ zone_label }} --overwrite"
+      loop: "{{ k8s_nodes.stdout.split() }}"
+      become_user: ubuntu

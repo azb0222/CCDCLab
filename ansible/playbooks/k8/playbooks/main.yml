@@ -1,0 +1,5 @@
+---
+- import_playbook: bootstrapAllNodes.yml
+- import_playbook: bootstrapMasterNode.yml
+- import_playbook: bootstrapWorkerNodes.yml
+- import_playbook: bootstrapGitlab.yml
