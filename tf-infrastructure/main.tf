@@ -1,9 +1,9 @@
 //contains bucket to store Terraform state files 
 terraform {
   backend "s3" {
-    bucket = "ccdc2024-test-infra-state-file"
+    bucket = "ccdc2024-test-infra-state-filee"
     key    = "my-terraform-project"
-    region = "us-east-2"
+    region = "us-east-1"
   }
 }
 

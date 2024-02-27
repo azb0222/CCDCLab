@@ -116,7 +116,7 @@ data "aws_directory_service_directory" "my_domain_controller" { #TODO remove?
   directory_id = aws_directory_service_directory.umasscybersec_ad.id 
 }
 resource "aws_ssm_document" "ad-join-domain" {
-  name          = "ad-join-domain"
+  name          = "ad-join-domain-2"
   document_type = "Command"
   content = jsonencode(
     {
